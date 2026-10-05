@@ -1,0 +1,10 @@
+# Build output and local files
+bin/
+obj/
+build/
+release/
+packages/
+.vs/
+*.user
+*.log
+settings/
