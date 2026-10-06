@@ -1,172 +1,153 @@
-﻿using FlyleafLib;
+using Newtonsoft.Json;
+using QocastPlayer.Control;
+using QocastPlayer.Receiver;
+using QocastPlayer.Video;
+using Serilog;
 using System;
 using System.IO;
-using System.Linq;
-using System.Runtime.InteropServices;
+using System.Net.Sockets;
+using System.Threading;
 using System.Windows.Forms;
-using Serilog;
-using Serilog.Core;
-using Serilog.Events;
 
-namespace opentuner
+namespace QocastPlayer
 {
-    static class Program
+    internal static class Program
     {
-        /// <summary>
-        /// The main entry point for the application.
-        /// </summary>
-        public static LoggingLevelSwitch levelSwitch;
-
-        [DllImport("user32.dll")]
-        private static extern bool ShowWindow([In] IntPtr hWnd, [In] int nCmdShow);
-
-        [DllImport("kernel32.dll")]
-        static extern IntPtr GetConsoleWindow();
-
         [STAThread]
-
-        static void Main(string[] args)
+        private static int Main(string[] args)
         {
-            int i = 0;
-            int debugLevel = 3; // Warning
-            levelSwitch = new LoggingLevelSwitch();
-
-            while (i < args.Length)
-            {
-                switch (args[i])
-                {
-                    case "--debuglevel":
-                        int new_debug_level = -1;
-
-                        if (int.TryParse(args[i + 1], out new_debug_level))
-                        {
-                            if (new_debug_level < 6 && new_debug_level >= 0)
-                            {
-                                debugLevel = new_debug_level;
-                            }
-                            i += 1;
-                        }
-                        break;
-
-                    case "--hideconsolewindow":
-                        // minimize console window
-                        IntPtr handle = GetConsoleWindow();
-                        if (handle != IntPtr.Zero)
-                        {
-                            ShowWindow(handle, 0);
-                        }
-                        break;
-
-                    default:
-                        break;
-                }
-                // grab next param
-                i += 1;
-            }
-
-            switch (debugLevel)
-            {
-                case 0: // Verbose
-                    levelSwitch.MinimumLevel = LogEventLevel.Verbose;
-                    break;
-
-                case 1: // Debug
-                    levelSwitch.MinimumLevel = LogEventLevel.Debug;
-                    break;
-
-                case 2: // Information
-                    levelSwitch.MinimumLevel = LogEventLevel.Information;
-                    break;
-
-                case 3: // Warning
-                    levelSwitch.MinimumLevel = LogEventLevel.Warning;
-                    break;
-
-                case 4: // Error
-                    levelSwitch.MinimumLevel = LogEventLevel.Error;
-                    break;
-
-                case 5: // Fatal
-                    levelSwitch.MinimumLevel = LogEventLevel.Fatal;
-                    break;
-
-                default:
-                    levelSwitch.MinimumLevel = LogEventLevel.Warning;
-                    break;
-            }
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
 
             Log.Logger = new LoggerConfiguration()
-                .MinimumLevel.ControlledBy(levelSwitch)
-                .WriteTo.Console()
-                .WriteTo.File("logs\\ot_log_" + DateTime.Now.ToString("yyyy-dd-M--HH-mm-ss") + ".txt")
+                .WriteTo.File(Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "player.log"),
+                              fileSizeLimitBytes: 5 * 1024 * 1024, rollOnFileSizeLimit: true, retainedFileCountLimit: 2)
                 .CreateLogger();
 
-            // Always log the starting information
-            // swith logging level to Information
-            LogEventLevel lastMinimumLevel = levelSwitch.MinimumLevel;
-            levelSwitch.MinimumLevel = LogEventLevel.Information;
-
-            Log.Information("Starting OpenTuner");
-
-            // swith logging level back
-            levelSwitch.MinimumLevel = lastMinimumLevel;
-
-            string logDirectory = AppDomain.CurrentDomain.BaseDirectory + "logs\\";
-
-            if (Directory.Exists(logDirectory))
+            // only one player may own the tuner
+            using (var single = new Mutex(true, "QOCAST-Player", out bool first))
             {
-                var logFiles = Directory.GetFiles(logDirectory, "*.txt").Select(f => new FileInfo(f)).OrderByDescending(f => f.CreationTime);
-                int fileCount = logFiles.Count();
-                if (fileCount > 10)
+                if (!first)
                 {
-                    i = 0;
-                    foreach (var file in logFiles)
-                    {
-                        if (i > 9)
-                        {
-                            try
-                            {
-                                File.Delete(file.FullName);
-                                Log.Debug("Log file deleted: " + file.Name);
-                            }
-                            catch
-                            {
-                                Log.Warning("Log file for deletion not found: " + file.Name);
-                            }
-                        }
-                        i++;
-                    }
+                    Log.Information("Already running, exiting");
+                    return 2;
+                }
+
+                try
+                {
+                    return Run(args);
+                }
+                catch (Exception ex)
+                {
+                    Log.Fatal(ex, "Player stopped");
+                    MessageBox.Show(ex.Message, "QOCAST Player", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return 1;
+                }
+                finally
+                {
+                    Log.CloseAndFlush();
                 }
             }
+        }
 
+        private static int Run(string[] args)
+        {
+            string path = PlayerConfig.DefaultPath;
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--config")
+                    path = Path.GetFullPath(args[i + 1]);
+            }
+
+            PlayerConfig config;
             try
             {
-                Engine.Start(new EngineConfig()
+                config = PlayerConfig.Load(path);
+            }
+            catch (ConfigException ex)
+            {
+                Log.Error("Config: " + ex.Message);
+                MessageBox.Show(ex.Message, "QOCAST Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return 1;
+            }
+
+            Log.Information("Starting, receiver {Receiver}, control port {Port}", config.receiver_type, config.control_port);
+            string before = JsonConvert.SerializeObject(config);
+
+            using (var receiver = new ReceiverService(config))
+            using (var window = new PlayerWindow(config))
+            {
+                var control = new ControlServer(receiver, config);
+                try
                 {
-                    FFmpegPath = @"ffmpeg\",
-                    FFmpegDevices = false,    // Prevents loading avdevice/avfilter dll files. Enable it only if you plan to use dshow/gdigrab etc.
-                                              //LogLevel = LogLevel.Debug,
-                                              //LogOutput = ":console",
-                                              //LogOutput = @"C:\temp2\ffmpeg.log",
+                    control.Start();
+                }
+                catch (SocketException ex)
+                {
+                    Log.Error("Control port " + config.control_port + ": " + ex.Message);
+                    MessageBox.Show("Port " + config.control_port + " is already in use - is OpenTuner or another player running?\nClose it and start the player again.",
+                                    "QOCAST Player", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    return 1;
+                }
 
-                    /*
-                    UIRefresh = true,    // Required for Activity, BufferedDuration, Stats in combination with Config.Player.Stats = true
-                    UIRefreshInterval = 250,      // How often (in ms) to notify the UI
-                    UICurTimePerSecond = false,     // Whether to notify UI for CurTime only when it's second changed or by UIRefreshInterval
-                    */
-                });
+                var video = new VideoPlayer(window.Video, receiver.Stream, config.muted ? 0 : config.volume);
+                window.SoundChanged += (muted, volume) => video.SetVolume(muted ? 0 : volume);
 
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                Application.Run(new MainForm(args));
+                // locked = play the stream, anything else = stop (no frozen picture left on screen)
+                receiver.StateChanged += state =>
+                {
+                    if (state == ReceiverState.Locked)
+                        video.Play();
+                    else
+                        video.Stop();
+                    window.ShowStatus(StatusText(state, config));
+                };
+                video.PictureChanged += picture =>
+                {
+                    if (picture)
+                    {
+                        MediaInfo info = video.LastMediaInfo;
+                        if (info != null)
+                            window.SetVideoAspectRatio(info.VideoWidth, info.VideoHeight,
+                                                       info.VideoSarNum, info.VideoSarDen);
+                    }
+                    window.ShowStatus(picture ? null : StatusText(receiver.State, config));
+                };
+
+                window.ShowStatus(StatusText(ReceiverState.Disconnected, config));
+                window.Shown += (s, e) => receiver.Start();
+                Application.Run(window);
+
+                control.Close();
+                video.Dispose();
             }
-            catch (Exception ex)
+
+            // save only what the user changed (window place, sound, always on top)
+            if (JsonConvert.SerializeObject(config) != before)
             {
-                Log.Fatal(ex, "Program.Main: Uncaught Exception");
+                try { config.Save(); }
+                catch (Exception ex) { Log.Warning("Could not save " + PlayerConfig.FileName + ": " + ex.Message); }
             }
-            finally
+
+            Log.Information("Bye");
+            return 0;
+        }
+
+        // null = hide the text (the picture is showing)
+        private static string StatusText(ReceiverState state, PlayerConfig config)
+        {
+            switch (state)
             {
-                Log.CloseAndFlush();
+                case ReceiverState.Disconnected:
+                    return config.receiver_type == "picotuner" ? "PicoTuner not found - plug it in"
+                         : config.receiver_type == "minitiouner" ? "MiniTiouner not found - plug it in"
+                         : "No tuner found - plug in a MiniTiouner or PicoTuner";
+                case ReceiverState.Waiting:
+                    return "Waiting for QOCAST";
+                case ReceiverState.Tuning:
+                    return "No signal";
+                default:
+                    return "Signal locked - waiting for picture";
             }
         }
     }

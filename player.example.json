@@ -1,0 +1,18 @@
+{
+  "receiver_type": "auto",
+  "lnb_offset_khz": 9750000,
+  "rf_input": "A",
+  "lnb_power": "off",
+  "tone_22khz": false,
+  "control_port": 8090,
+  "qocast_info_url": null,
+  "volume": 50,
+  "muted": true,
+  "always_on_top": false,
+  "window": {
+    "x": 100,
+    "y": 100,
+    "width": 960,
+    "height": 540
+  }
+}
