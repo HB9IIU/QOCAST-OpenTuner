@@ -21,6 +21,7 @@ namespace QocastPlayer.Control
         public int tuner = 1;
         public long frequency_khz;
         public long symbol_rate_ksps;
+        public bool direct;     // local mode: tune this frequency as it is (no LNB)
     }
 
     public sealed class QocastTuneResponse
@@ -199,7 +200,57 @@ namespace QocastPlayer.Control
                 return;
             }
 
+            if (method == "POST" && path == "/api/v1/lnb")
+            {
+                HandleLnb(stream, body);
+                return;
+            }
+
             WriteJson(stream, 404, new { error = "not_found" });
+        }
+
+        // QOCAST's LNB calibration: new LNB offset (kHz). Saved in player.json, and the
+        // current station is tuned again with it.
+        private void HandleLnb(NetworkStream stream, string body)
+        {
+            long offsetKhz;
+            try
+            {
+                offsetKhz = (long)Newtonsoft.Json.Linq.JObject.Parse(body)["lnb_offset_khz"];
+            }
+            catch (Exception)
+            {
+                WriteJson(stream, 400, new { ok = false, error = "lnb_offset_khz_required" });
+                return;
+            }
+            if (offsetKhz < 1000000 || offsetKhz > 20000000)
+            {
+                WriteJson(stream, 400, new { ok = false, error = "invalid_lnb_offset" });
+                return;
+            }
+
+            lock (_tuneLock)
+            {
+                long previous = _config.lnb_offset_khz;
+                _config.lnb_offset_khz = offsetKhz;
+                try
+                {
+                    _config.Save();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning("Control: could not save the LNB offset: " + ex.Message);
+                }
+                Log.Information("Control: LNB offset {Previous} -> {Offset} kHz", previous, offsetKhz);
+
+                TuneRequest request = _receiver.LastRequest;
+                if (request != null && _receiver.CheckTune(request.RfKhz, request.SymbolRateKsps, request.Direct) == null)
+                {
+                    _receiver.Tune(request.RfKhz, request.SymbolRateKsps, request.Direct);
+                    _lastTuneAtUtc = DateTime.UtcNow;
+                }
+            }
+            WriteJson(stream, 200, new { ok = true, lnb_offset_khz = offsetKhz });
         }
 
         private object BuildStatus()
@@ -275,7 +326,7 @@ namespace QocastPlayer.Control
                 long generation = Interlocked.Increment(ref _generation);
                 try
                 {
-                    _receiver.Tune(request.frequency_khz, request.symbol_rate_ksps);
+                    _receiver.Tune(request.frequency_khz, request.symbol_rate_ksps, request.direct);
                     _lastTuneAtUtc = DateTime.UtcNow;
 
                     var accepted = Remember(new QocastTuneResponse
@@ -318,7 +369,7 @@ namespace QocastPlayer.Control
             if (request.symbol_rate_ksps < 1 || request.symbol_rate_ksps > 10000)
                 return "invalid_symbol_rate";
             // RF minus LNB offset must be a frequency the tuner can receive
-            return _receiver.CheckTune(request.frequency_khz, request.symbol_rate_ksps);
+            return _receiver.CheckTune(request.frequency_khz, request.symbol_rate_ksps, request.direct);
         }
 
         private QocastTuneResponse Remember(QocastTuneResponse response)

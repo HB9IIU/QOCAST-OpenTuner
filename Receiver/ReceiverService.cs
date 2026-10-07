@@ -3,6 +3,7 @@ using opentuner.MediaSources.Minitiouner.HardwareInterfaces;
 using Serilog;
 using System;
 using System.Collections.Concurrent;
+using System.Collections.Generic;
 using System.Threading;
 
 namespace QocastPlayer.Receiver
@@ -106,10 +107,12 @@ namespace QocastPlayer.Receiver
         }
 
         // RF frequency as QOCAST sends it; the LNB offset from player.json is taken off here.
+        // direct = QOCAST's local mode: the frequency goes to the tuner as it is (the Pluto's
+        // uplink, no LNB), and LNB power stays off.
         // Returns null when the tuner can receive it, otherwise a short error code for the API.
-        public string CheckTune(long rfKhz, long symbolRateKsps)
+        public string CheckTune(long rfKhz, long symbolRateKsps, bool direct = false)
         {
-            long ifKhz = rfKhz - _config.lnb_offset_khz;
+            long ifKhz = direct ? rfKhz : rfKhz - _config.lnb_offset_khz;
             if (ifKhz < MinIfKhz || ifKhz > MaxIfKhz)
                 return "invalid_frequency";
             if (symbolRateKsps < 1 || symbolRateKsps > 10000)
@@ -117,14 +120,14 @@ namespace QocastPlayer.Receiver
             return null;
         }
 
-        public void Tune(long rfKhz, long symbolRateKsps)
+        public void Tune(long rfKhz, long symbolRateKsps, bool direct = false)
         {
-            string error = CheckTune(rfKhz, symbolRateKsps);
+            string error = CheckTune(rfKhz, symbolRateKsps, direct);
             if (error != null)
                 throw new ArgumentOutOfRangeException(nameof(rfKhz), error);
 
-            long ifKhz = rfKhz - _config.lnb_offset_khz;
-            var request = new TuneRequest(rfKhz, (uint)ifKhz, (uint)symbolRateKsps);
+            long ifKhz = direct ? rfKhz : rfKhz - _config.lnb_offset_khz;
+            var request = new TuneRequest(rfKhz, (uint)ifKhz, (uint)symbolRateKsps, direct);
             Session session;
             lock (_lock)
             {
@@ -215,6 +218,13 @@ namespace QocastPlayer.Receiver
             private volatile bool _closing;
             private volatile bool _locked;
             private volatile bool _awaitingRetune;
+
+            // Unsteady lock (it keeps dropping): the demodulator can lock beside the signal
+            // (e.g. half a symbol rate off) and stay stuck there. A fresh search fixes it.
+            private const int UnsteadyLosses = 3;
+            private static readonly TimeSpan UnsteadyWindow = TimeSpan.FromSeconds(15);
+            private readonly Queue<DateTime> _lockLosses = new Queue<DateTime>();
+            private DateTime _lastFreshSearch = DateTime.MinValue;
             private volatile bool _streaming;
 
             public string HardwareName { get; }
@@ -322,6 +332,8 @@ namespace QocastPlayer.Receiver
                 PlayerConfig config = _owner._config;
                 bool inputB = config.rf_input == "B";
                 byte psu = config.lnb_power == "vertical" ? (byte)1 : config.lnb_power == "horizontal" ? (byte)2 : (byte)0;
+                if (request.Direct)
+                    psu = 0;        // local mode: an antenna or the Pluto on the input, never LNB voltage
 
                 var tunerConfig = new TunerConfig
                 {
@@ -375,6 +387,27 @@ namespace QocastPlayer.Receiver
                     StopStreaming();
 
                 _owner.SetState(locked ? ReceiverState.Locked : ReceiverState.Tuning);
+
+                if (!locked)
+                    SearchAgainIfUnsteady();
+            }
+
+            private void SearchAgainIfUnsteady()
+            {
+                DateTime now = DateTime.UtcNow;
+                _lockLosses.Enqueue(now);
+                while (_lockLosses.Count > 0 && now - _lockLosses.Peek() > UnsteadyWindow)
+                    _lockLosses.Dequeue();
+                if (_lockLosses.Count < UnsteadyLosses || now - _lastFreshSearch < UnsteadyWindow)
+                    return;
+
+                TuneRequest request = _owner.LastRequest;
+                if (request == null)
+                    return;
+                _lastFreshSearch = now;
+                _lockLosses.Clear();
+                Log.Information("Receiver: lock keeps dropping, searching again");
+                Tune(request);
             }
 
             private void StartStreaming()
@@ -492,15 +525,17 @@ namespace QocastPlayer.Receiver
 
     public sealed class TuneRequest
     {
-        public TuneRequest(long rfKhz, uint ifKhz, uint symbolRateKsps)
+        public TuneRequest(long rfKhz, uint ifKhz, uint symbolRateKsps, bool direct = false)
         {
             RfKhz = rfKhz;
             IfKhz = ifKhz;
             SymbolRateKsps = symbolRateKsps;
+            Direct = direct;
         }
 
         public long RfKhz { get; }
         public uint IfKhz { get; }
         public uint SymbolRateKsps { get; }
+        public bool Direct { get; }
     }
 }
