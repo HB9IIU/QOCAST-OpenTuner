@@ -29,9 +29,9 @@ namespace QocastPlayer
         public bool tone_22khz = false;
         public int control_port = 8090;
         public string qocast_info_url = null;   // null = no status to QOCAST
-        public int volume = 50;
-        public bool muted = true;
-        public bool always_on_top = false;
+        public int volume = 60;
+        public bool muted = false;
+        public bool always_on_top = true;
         public WindowBounds window = new WindowBounds();
 
         [JsonIgnore]

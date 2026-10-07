@@ -6,9 +6,9 @@
   "tone_22khz": false,
   "control_port": 8090,
   "qocast_info_url": null,
-  "volume": 50,
-  "muted": true,
-  "always_on_top": false,
+  "volume": 60,
+  "muted": false,
+  "always_on_top": true,
   "window": {
     "x": 100,
     "y": 100,
