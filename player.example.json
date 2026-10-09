@@ -9,6 +9,7 @@
   "volume": 60,
   "muted": false,
   "always_on_top": true,
+  "title_bar": false,
   "window": {
     "x": 100,
     "y": 100,

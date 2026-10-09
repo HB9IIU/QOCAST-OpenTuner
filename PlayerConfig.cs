@@ -32,6 +32,7 @@ namespace QocastPlayer
         public int volume = 60;
         public bool muted = false;
         public bool always_on_top = true;
+        public bool title_bar = false;          // false: only the picture, moved by dragging it
         public WindowBounds window = new WindowBounds();
 
         [JsonIgnore]
@@ -60,7 +61,7 @@ namespace QocastPlayer
             var config = new PlayerConfig { Path = path };
             var errors = new List<string>();
             var known = new HashSet<string> { "receiver_type", "lnb_offset_khz", "rf_input", "lnb_power", "tone_22khz",
-                                              "control_port", "qocast_info_url", "volume", "muted", "always_on_top", "window" };
+                                              "control_port", "qocast_info_url", "volume", "muted", "always_on_top", "title_bar", "window" };
 
             foreach (JProperty property in root.Properties())
             {
@@ -78,6 +79,7 @@ namespace QocastPlayer
             config.volume = (int)ReadLong(root, "volume", config.volume, 0, 100, errors);
             config.muted = ReadBool(root, "muted", config.muted, errors);
             config.always_on_top = ReadBool(root, "always_on_top", config.always_on_top, errors);
+            config.title_bar = ReadBool(root, "title_bar", config.title_bar, errors);
             config.window = ReadWindow(root, errors);
 
             if (errors.Count > 0)

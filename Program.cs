@@ -77,6 +77,7 @@ namespace QocastPlayer
             using (var receiver = new ReceiverService(config))
             using (var window = new PlayerWindow(config))
             {
+                window.StationName = () => receiver.Service?.ServiceName;
                 var control = new ControlServer(receiver, config);
                 try
                 {
@@ -91,7 +92,8 @@ namespace QocastPlayer
                 }
 
                 var video = new VideoPlayer(window.Video, receiver.Stream, config.muted ? 0 : config.volume);
-                window.SoundChanged += (muted, volume) => video.SetVolume(muted ? 0 : volume);
+                // until Windows has the player's sound, VLC's own volume; then Windows (the VU meter stays alive when muted)
+                window.SoundChanged += (muted, volume) => video.SetVolume(window.WindowsSound ? 100 : muted ? 0 : volume);
 
                 // locked = play the stream, anything else = stop (no frozen picture left on screen)
                 receiver.StateChanged += state =>
