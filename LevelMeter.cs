@@ -39,8 +39,12 @@ namespace QocastPlayer
 
         protected override void OnPaint(PaintEventArgs e)
         {
+            // Whole pixels only: equal segments and equal gaps (fractional positions
+            // gave gaps of 1 or 2 px and blurred edges); the rest is shared at both ends.
+            const int Gap = 2;
             int top = Height / 2 - 4, height = 8;
-            float step = (float)Width / Segments;
+            int width = Math.Max(1, (Width - (Segments - 1) * Gap) / Segments);
+            int left = (Width - (Segments * width + (Segments - 1) * Gap)) / 2;
             int lit = Lit(_levelDb), hold = Lit(_holdDb) - 1;
             for (int i = 0; i < Segments; i++)
             {
@@ -48,7 +52,7 @@ namespace QocastPlayer
                 Color on = db > -3f ? Color.Red : db > -12f ? Color.Gold : Color.LimeGreen;
                 Color color = i < lit || i == hold && hold > 0 ? on : Color.FromArgb(40, 40, 40);
                 using (var brush = new SolidBrush(color))
-                    e.Graphics.FillRectangle(brush, i * step, top, step - 1.5f, height);
+                    e.Graphics.FillRectangle(brush, left + i * (width + Gap), top, width, height);
             }
         }
 
