@@ -112,7 +112,7 @@ namespace QocastPlayer
             _station = new Label
             {
                 Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleCenter,
-                ForeColor = Color.Gainsboro, Font = new Font("Segoe UI Semibold", 10f)
+                ForeColor = Color.Gainsboro, Font = new Font("Consolas", 10.5f, FontStyle.Bold), AutoEllipsis = true
             };
             _station.MouseDown += DragWindow;
             _meterTimer.Tick += (s, e) =>
@@ -185,7 +185,19 @@ namespace QocastPlayer
 
             ApplyTitleBar();
             UpdateTitle();
-            Bounds = VisibleBounds(new Rectangle(config.window.x, config.window.y, config.window.width, config.window.height));
+            Bounds = VisibleBounds(config.window.IsDefault ? CornerBounds()
+                : new Rectangle(config.window.x, config.window.y, config.window.width, config.window.height));
+        }
+
+        // The Player appears without taking the focus: the browser with the QOCAST page opens in front.
+        protected override bool ShowWithoutActivation { get { return true; } }
+
+        // first start: small, bottom right corner of the main screen
+        private static Rectangle CornerBounds()
+        {
+            Rectangle area = Screen.PrimaryScreen.WorkingArea;
+            const int width = 640, height = 360, margin = 16;
+            return new Rectangle(area.Right - width - margin, area.Bottom - height - margin, width, height);
         }
 
         // null = hide the text (picture showing). Safe to call from any thread.

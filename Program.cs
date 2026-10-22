@@ -77,7 +77,7 @@ namespace QocastPlayer
             using (var receiver = new ReceiverService(config))
             using (var window = new PlayerWindow(config))
             {
-                window.StationName = () => receiver.Service?.ServiceName;
+                window.StationName = () => RxInfo.BarText(receiver, config);
                 var control = new ControlServer(receiver, config);
                 try
                 {

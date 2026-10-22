@@ -13,6 +13,9 @@ namespace QocastPlayer
         public int y = 100;
         public int width = 960;
         public int height = 540;
+        // true until a window place comes from player.json: the first start puts the window in
+        // the bottom right corner, small, so the browser with the QOCAST page stays in front
+        [Newtonsoft.Json.JsonIgnore] public bool IsDefault = true;
     }
 
     // player.json next to qocast-player.exe, optional: without it the defaults below are used
@@ -176,6 +179,7 @@ namespace QocastPlayer
                 if (property.Name != "x" && property.Name != "y" && property.Name != "width" && property.Name != "height")
                     errors.Add("unknown entry \"window." + property.Name + "\"");
             }
+            bounds.IsDefault = false;
             bounds.x = (int)ReadLong(window, "x", bounds.x, -100000, 100000, errors);
             bounds.y = (int)ReadLong(window, "y", bounds.y, -100000, 100000, errors);
             bounds.width = (int)ReadLong(window, "width", bounds.width, 160, 100000, errors);

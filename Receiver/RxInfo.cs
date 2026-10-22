@@ -1,6 +1,9 @@
 using opentuner;
 using opentuner.ExtraFeatures.QocastStream;
+using Serilog;
 using System;
+using System.Collections.Generic;
+using System.Globalization;
 
 namespace QocastPlayer.Receiver
 {
@@ -73,6 +76,43 @@ namespace QocastPlayer.Receiver
             }
 
             return info;
+        }
+
+        // The player's bottom bar: "ON1RC · SR 500 kS/s · MER 6.3 dB · D +4.0 dB · FEC 3/5"
+        // (only the callsign while the receiver is not locked).
+        private static bool _barTextFailed;
+
+        public static string BarText(ReceiverService receiver, PlayerConfig config)
+        {
+            string station = receiver.Service?.ServiceName?.Trim('\0', ' ') ?? "";
+            if (receiver.State != ReceiverState.Locked)
+                return station;
+            QocastRxInfo info;
+            try
+            {
+                info = Build(receiver, config);
+            }
+            catch (Exception ex)
+            {
+                // the bar must never stop updating because of one odd status value
+                if (!_barTextFailed)
+                    Log.Warning(ex, "Bottom bar: signal values not available");
+                _barTextFailed = true;
+                return station;
+            }
+            var parts = new List<string>();
+            if (station != "")
+                parts.Add(station);
+            if (info.symbol_rate_ksps.HasValue)
+                parts.Add("SR " + info.symbol_rate_ksps.Value.ToString(CultureInfo.InvariantCulture).PadLeft(4) + " kS/s");
+            if (info.mer_db.HasValue)
+                parts.Add(string.Format(CultureInfo.InvariantCulture, "MER {0,4:0.0} dB", info.mer_db.Value));
+            if (info.db_margin.HasValue)
+                parts.Add(string.Format(CultureInfo.InvariantCulture, "D {0,5:+0.0;-0.0;+0.0} dB", info.db_margin.Value));
+            int space = info.modcod == null ? -1 : info.modcod.LastIndexOf(' ');
+            if (space >= 0 && info.modcod.IndexOf('/') > space)
+                parts.Add("FEC " + info.modcod.Substring(space + 1));
+            return string.Join(" · ", parts);
         }
 
         // same texts as the OpenTuner Properties panel
