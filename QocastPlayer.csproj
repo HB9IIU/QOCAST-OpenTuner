@@ -40,6 +40,8 @@
 
   <ItemGroup>
     <None Include="player.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- native libusb 1.0 (x64), needed by LibUsbDotNet for the PicoTuner -->
+    <None Include="lib\libusb-1.0.dll" Link="libusb-1.0.dll" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>
