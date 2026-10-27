@@ -141,6 +141,8 @@ namespace QocastPlayer
             switch (state)
             {
                 case ReceiverState.Disconnected:
+                    if (System.Diagnostics.Process.GetProcessesByName("opentuner").Length > 0)
+                        return "OpenTuner is using the tuner - please close OpenTuner";
                     return config.receiver_type == "picotuner" ? "PicoTuner not found - plug it in"
                          : config.receiver_type == "minitiouner" ? "MiniTiouner not found - plug it in"
                          : "No tuner found - plug in a MiniTiouner or PicoTuner";

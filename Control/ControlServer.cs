@@ -206,6 +206,12 @@ namespace QocastPlayer.Control
                 return;
             }
 
+            if (method == "POST" && path == "/api/v1/input")
+            {
+                HandleInput(stream, body);
+                return;
+            }
+
             WriteJson(stream, 404, new { error = "not_found" });
         }
 
@@ -253,6 +259,58 @@ namespace QocastPlayer.Control
             WriteJson(stream, 200, new { ok = true, lnb_offset_khz = offsetKhz });
         }
 
+        // QOCAST's Setup page: which RF input the tuner listens on, and the LNB voltage on it
+        // (off, vertical = 13 V, horizontal = 18 V). Saved in player.json, and the current
+        // station is tuned again with it.
+        private void HandleInput(NetworkStream stream, string body)
+        {
+            string rfInput, lnbPower;
+            try
+            {
+                var json = Newtonsoft.Json.Linq.JObject.Parse(body);
+                rfInput = (string)json["rf_input"] ?? _config.rf_input;
+                lnbPower = (string)json["lnb_power"] ?? _config.lnb_power;
+            }
+            catch (Exception)
+            {
+                WriteJson(stream, 400, new { ok = false, error = "invalid_json" });
+                return;
+            }
+            if (rfInput != "A" && rfInput != "B")
+            {
+                WriteJson(stream, 400, new { ok = false, error = "invalid_rf_input" });
+                return;
+            }
+            if (lnbPower != "off" && lnbPower != "vertical" && lnbPower != "horizontal")
+            {
+                WriteJson(stream, 400, new { ok = false, error = "invalid_lnb_power" });
+                return;
+            }
+
+            lock (_tuneLock)
+            {
+                _config.rf_input = rfInput;
+                _config.lnb_power = lnbPower;
+                try
+                {
+                    _config.Save();
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning("Control: could not save the RF input: " + ex.Message);
+                }
+                Log.Information("Control: RF input {Input}, LNB power {Power}", rfInput, lnbPower);
+
+                TuneRequest request = _receiver.LastRequest;
+                if (request != null && _receiver.CheckTune(request.RfKhz, request.SymbolRateKsps, request.Direct) == null)
+                {
+                    _receiver.Tune(request.RfKhz, request.SymbolRateKsps, request.Direct);
+                    _lastTuneAtUtc = DateTime.UtcNow;
+                }
+            }
+            WriteJson(stream, 200, new { ok = true, rf_input = rfInput, lnb_power = lnbPower });
+        }
+
         private object BuildStatus()
         {
             bool connected = _receiver.Connected;
@@ -277,6 +335,8 @@ namespace QocastPlayer.Control
                 source_connected = connected,
                 requested_frequency_khz = request?.RfKhz,
                 requested_symbol_rate_ksps = (long?)request?.SymbolRateKsps,
+                rf_input_setting = _config.rf_input,
+                lnb_power_setting = _config.lnb_power,
                 receiver
             };
         }

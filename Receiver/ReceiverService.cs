@@ -331,6 +331,7 @@ namespace QocastPlayer.Receiver
             {
                 PlayerConfig config = _owner._config;
                 bool inputB = config.rf_input == "B";
+                bool pico = _hardware is PicoTunerInterface;
                 byte psu = config.lnb_power == "vertical" ? (byte)1 : config.lnb_power == "horizontal" ? (byte)2 : (byte)0;
                 if (request.Direct)
                     psu = 0;        // local mode: an antenna or the Pluto on the input, never LNB voltage
@@ -342,8 +343,9 @@ namespace QocastPlayer.Receiver
                     symbol_rate = request.SymbolRateKsps,
                     rf_input = inputB ? nim.NIM_INPUT_BOTTOM : nim.NIM_INPUT_TOP,
                     tone_22kHz_P1 = config.tone_22khz,
-                    lnba_psu = inputB ? (byte)0 : psu,
-                    lnbb_psu = inputB ? psu : (byte)0
+                    // PicoTuner: one LNB voltage for both inputs, driven only by the "B" channel (as in OpenTuner)
+                    lnba_psu = pico || inputB ? (byte)0 : psu,
+                    lnbb_psu = pico || inputB ? psu : (byte)0
                 };
 
                 // a new station: old stream bytes must not reach the player, and status
