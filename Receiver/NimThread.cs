@@ -33,6 +33,8 @@ namespace QocastPlayer.Receiver
         private Action hardware_lost;
 
         bool reset = false;
+        bool reset2 = false;       // tuner 2 (PicoTuner second channel) was just set
+        bool lnbSet = false;       // the LNB supply and 22 kHz were set (by tuner 1, or by tuner 2 when it came first)
 
         private volatile bool _stop = false;
         private readonly AutoResetEvent _wake = new AutoResetEvent(false);
@@ -98,6 +100,7 @@ namespace QocastPlayer.Receiver
             byte err = 0;
 
             nim_status.T1P2_reset = reset;
+            nim_status.T2P1_reset = reset2;
 
             /*
             if (no_lna)
@@ -313,6 +316,7 @@ namespace QocastPlayer.Receiver
 
 
             reset = false;
+            reset2 = false;
 
             return err;
         }
@@ -347,13 +351,23 @@ namespace QocastPlayer.Receiver
 
                 while (!_stop)
                 {
-                    // several tune requests waiting (fast clicking): only the newest counts
-                    TunerConfig nim_config = null;
+                    // several tune requests waiting (fast clicking): only the newest of each tuner counts
+                    TunerConfig newest1 = null, newest2 = null;
                     while (config_queue.TryDequeue(out TunerConfig queued))
-                        nim_config = queued;
-
-                    if (nim_config != null)
                     {
+                        if (queued.tuner == 2)
+                            newest2 = queued;
+                        else
+                            newest1 = queued;
+                    }
+
+                    if (newest1 != null || newest2 != null)
+                    {
+                      foreach (TunerConfig nim_config in new[] { newest1, newest2 })
+                      {
+                        if (nim_config == null)
+                            continue;
+
                         err = apply_config(nim_config);
 
                         if (err != 0)
@@ -374,7 +388,11 @@ namespace QocastPlayer.Receiver
                         }
 
                         configured = true;
-                        reset = true;
+                        if (nim_config.tuner == 2)
+                            reset2 = true;
+                        else
+                            reset = true;
+                      }
                     }
                     else if (!configured)
                     {
@@ -415,7 +433,13 @@ namespace QocastPlayer.Receiver
         private byte apply_config(TunerConfig nim_config)
         {
             byte err = 0;
+            bool second = nim_config.tuner == 2;      // PicoTuner channel 2: demod BOTTOM, tuner 2
 
+            // channel 2 leaves the LNB supply and the tone alone when channel 1 already set them
+            bool setLnb = !second || !lnbSet;
+            lnbSet = true;
+
+            if (setLnb)
             switch (nim_config.lnba_psu)
             {
                 case 0:
@@ -429,6 +453,7 @@ namespace QocastPlayer.Receiver
                     break;
             }
 
+            if (setLnb)
             switch (nim_config.lnbb_psu)
             {
                 case 0:
@@ -444,13 +469,13 @@ namespace QocastPlayer.Receiver
 
             // setup demod
             Log.Information("Configure Demod Receive - " + nim_config.tuner);
-            err = _stv0910.stv0910_setup_receive(stv0910.STV0910_DEMOD_TOP, nim_config.symbol_rate);
+            err = _stv0910.stv0910_setup_receive(second ? stv0910.STV0910_DEMOD_BOTTOM : stv0910.STV0910_DEMOD_TOP, nim_config.symbol_rate);
 
             // configure tuner
             if (err == 0)
             {
                 Log.Information("Configure Tuner - " + nim_config.tuner.ToString());
-                err = _stv6120.stv6120_init(1, nim_config.frequency, nim_config.rf_input, nim_config.symbol_rate);
+                err = _stv6120.stv6120_init((byte)(second ? 2 : 1), nim_config.frequency, nim_config.rf_input, nim_config.symbol_rate);
             }
             else
             {
@@ -461,7 +486,7 @@ namespace QocastPlayer.Receiver
             if (err == 0)
             {
                 Log.Information("Demod Start Scan - " + nim_config.tuner.ToString());
-                err = _stv0910.stv0910_start_scan(stv0910.STV0910_DEMOD_TOP);
+                err = _stv0910.stv0910_start_scan(second ? stv0910.STV0910_DEMOD_BOTTOM : stv0910.STV0910_DEMOD_TOP);
             }
             else
             {
@@ -469,7 +494,7 @@ namespace QocastPlayer.Receiver
             }
 
             // 22 kHz - P1
-            if (err == 0)
+            if (err == 0 && setLnb)
             {
                 err = _stv0910.stv0910_switch_22Khz_p1(nim_config.tone_22kHz_P1);
             }

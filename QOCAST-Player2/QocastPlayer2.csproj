@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    QOCAST Player 2: stand-alone, one window that shows what the MiniTiouner / PicoTuner receives.
+    Tuned by QOCAST over a local API (127.0.0.1:8091).
+    The tuner code in OpenTuner\ comes from Open Tuner (GPL v3, see LICENSE and OpenTuner\README.txt).
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net472</TargetFramework>
+    <PlatformTarget>x64</PlatformTarget>
+    <AssemblyName>qocast-player_2</AssemblyName>
+    <RootNamespace>QocastPlayer</RootNamespace>
+    <ApplicationIcon>qocast.ico</ApplicationIcon>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+    <Nullable>disable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="System.Windows.Forms" />
+    <Reference Include="System.Drawing" />
+    <!-- MiniTiouner USB (FTDI D2XX driver wrapper) -->
+    <Reference Include="FTD2XX_NET">
+      <HintPath>lib\FTD2XX_NET.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <PackageReference Include="Serilog" Version="3.1.2-dev-02097" />
+    <PackageReference Include="Serilog.Sinks.File" Version="5.0.0" />
+    <!-- PicoTuner USB -->
+    <PackageReference Include="LibUsbDotNet" Version="2.2.29" />
+    <!-- video -->
+    <PackageReference Include="LibVLCSharp" Version="3.8.5" />
+    <PackageReference Include="LibVLCSharp.WinForms" Version="3.8.5" />
+    <PackageReference Include="VideoLAN.LibVLC.Windows" Version="3.0.20" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="player2.example.json" CopyToOutputDirectory="PreserveNewest" />
+    <!-- native libusb 1.0 (x64), needed by LibUsbDotNet for the PicoTuner -->
+    <None Include="lib\libusb-1.0.dll" Link="libusb-1.0.dll" CopyToOutputDirectory="PreserveNewest" />
+  </ItemGroup>
+
+</Project>

@@ -183,7 +183,10 @@ namespace QocastPlayer.Control
                     api_version = 1,
                     source = "Minitiouner Variant",
                     source_connected = connected,
-                    tuner_count = connected ? 1 : 0
+                    tuner_count = connected ? 1 : 0,
+                    minitiouners_found = MiniTiounerCount.Count(),
+                    channels = _receiver.SecondChannel ? 2 : 1,
+                    tuner2_udp_port = ReceiverService.Tuner2UdpPort
                 });
                 return;
             }
@@ -337,7 +340,25 @@ namespace QocastPlayer.Control
                 requested_symbol_rate_ksps = (long?)request?.SymbolRateKsps,
                 rf_input_setting = _config.rf_input,
                 lnb_power_setting = _config.lnb_power,
-                receiver
+                receiver,
+                tuner2 = BuildTuner2()
+            };
+        }
+
+        // channel 2 of a PicoTuner, null for any other tuner
+        private object BuildTuner2()
+        {
+            if (!_receiver.SecondChannel)
+                return null;
+            TuneRequest request = _receiver.LastRequest2;
+            opentuner.TunerStatus status = _receiver.LastStatus;
+            bool locked = _receiver.Tuner2Locked;
+            return new
+            {
+                locked,
+                requested_frequency_khz = request?.RfKhz,
+                requested_symbol_rate_ksps = (long?)request?.SymbolRateKsps,
+                mer_db = locked && status != null ? (double?)(Convert.ToDouble(status.T2P1_mer) / 10) : null
             };
         }
 
@@ -386,8 +407,15 @@ namespace QocastPlayer.Control
                 long generation = Interlocked.Increment(ref _generation);
                 try
                 {
-                    _receiver.Tune(request.frequency_khz, request.symbol_rate_ksps, request.direct);
-                    _lastTuneAtUtc = DateTime.UtcNow;
+                    if (request.tuner == 2)
+                    {
+                        _receiver.Tune2(request.frequency_khz, request.symbol_rate_ksps, request.direct);
+                    }
+                    else
+                    {
+                        _receiver.Tune(request.frequency_khz, request.symbol_rate_ksps, request.direct);
+                        _lastTuneAtUtc = DateTime.UtcNow;
+                    }
 
                     var accepted = Remember(new QocastTuneResponse
                     {
@@ -422,7 +450,7 @@ namespace QocastPlayer.Control
                 return "request_required";
             if (String.IsNullOrWhiteSpace(request.request_id) || request.request_id.Length > 80)
                 return "invalid_request_id";
-            if (request.tuner != 1)
+            if (request.tuner != 1 && !(request.tuner == 2 && _receiver.SecondChannel))
                 return "invalid_tuner";
             if (request.frequency_khz < 100000 || request.frequency_khz > UInt32.MaxValue)
                 return "invalid_frequency";

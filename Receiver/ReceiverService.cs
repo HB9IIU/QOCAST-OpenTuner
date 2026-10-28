@@ -4,6 +4,8 @@ using Serilog;
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Net;
+using System.Net.Sockets;
 using System.Threading;
 
 namespace QocastPlayer.Receiver
@@ -76,6 +78,49 @@ namespace QocastPlayer.Receiver
         public bool Connected
         {
             get { lock (_lock) return _session != null; }
+        }
+
+        // ---- second channel: only a PicoTuner has one (two demodulators, two streams) ----
+        // The Player stays the only owner of the USB device: channel 2's stream goes out by UDP on this
+        // computer, to a second player window (Player 2) that tunes it through the same API ("tuner": 2).
+
+        public const int Tuner2UdpPort = 5002;
+
+        private TuneRequest _lastRequest2;
+
+        public TuneRequest LastRequest2
+        {
+            get { lock (_lock) return _lastRequest2; }
+        }
+
+        public bool SecondChannel
+        {
+            get { lock (_lock) return _session != null && _session.IsPico; }
+        }
+
+        public bool Tuner2Locked
+        {
+            get { lock (_lock) return _session != null && _session.Locked2; }
+        }
+
+        public void Tune2(long rfKhz, long symbolRateKsps, bool direct = false)
+        {
+            string error = CheckTune(rfKhz, symbolRateKsps, direct);
+            if (error != null)
+                throw new ArgumentOutOfRangeException(nameof(rfKhz), error);
+
+            long ifKhz = direct ? rfKhz : rfKhz - _config.lnb_offset_khz;
+            var request = new TuneRequest(rfKhz, (uint)ifKhz, (uint)symbolRateKsps, direct);
+            Session session;
+            lock (_lock)
+            {
+                _lastRequest2 = request;
+                session = _session;
+            }
+
+            Log.Information("Tune channel 2: {Rf} kHz (IF {If} kHz), {Sr} kS/s", rfKhz, ifKhz, symbolRateKsps);
+            if (session != null && session.IsPico)
+                session.Tune2(request);
         }
 
         private void OnService(TSStatus status)
@@ -160,16 +205,19 @@ namespace QocastPlayer.Receiver
                     continue;
                 }
 
-                TuneRequest resume;
+                TuneRequest resume, resume2;
                 lock (_lock)
                 {
                     _session = session;
                     resume = _lastRequest;
+                    resume2 = _lastRequest2;
                 }
                 HardwareName = session.HardwareName;
                 SetState(resume == null ? ReceiverState.Waiting : ReceiverState.Tuning);
                 if (resume != null)
                     session.Tune(resume);
+                if (resume2 != null && session.IsPico)
+                    session.Tune2(resume2);
 
                 // until the tuner is lost or the player closes
                 WaitHandle.WaitAny(new WaitHandle[] { _stopEvent, session.Lost });
@@ -226,6 +274,16 @@ namespace QocastPlayer.Receiver
             private readonly Queue<DateTime> _lockLosses = new Queue<DateTime>();
             private DateTime _lastFreshSearch = DateTime.MinValue;
             private volatile bool _streaming;
+
+            // channel 2 (PicoTuner only); its thread starts with the first channel-2 tune
+            private volatile bool _locked2;
+            private volatile bool _awaitingRetune2;
+            private volatile bool _streaming2;
+            private Thread _ts2Thread;
+            private readonly AutoResetEvent _ts2Wake = new AutoResetEvent(false);
+
+            public bool IsPico { get { return _hardware is PicoTunerInterface; } }
+            public bool Locked2 { get { return _locked2; } }
 
             public string HardwareName { get; }
             public WaitHandle Lost { get { return _lost; } }
@@ -359,6 +417,131 @@ namespace QocastPlayer.Receiver
                 _nim.Wake();
             }
 
+            // channel 2: same LNB and input settings as channel 1, demodulator and tuner 2
+            public void Tune2(TuneRequest request)
+            {
+                PlayerConfig config = _owner._config;
+                bool inputB = config.rf_input == "B";
+                byte psu = config.lnb_power == "vertical" ? (byte)1 : config.lnb_power == "horizontal" ? (byte)2 : (byte)0;
+                if (request.Direct)
+                    psu = 0;
+
+                var tunerConfig = new TunerConfig
+                {
+                    tuner = 2,
+                    frequency = request.IfKhz,
+                    symbol_rate = request.SymbolRateKsps,
+                    rf_input = inputB ? nim.NIM_INPUT_BOTTOM : nim.NIM_INPUT_TOP,
+                    tone_22kHz_P1 = config.tone_22khz,
+                    lnba_psu = 0,
+                    lnbb_psu = psu
+                };
+
+                lock (_ts2Wake)
+                {
+                    if (_ts2Thread == null)
+                    {
+                        _ts2Thread = new Thread(Ts2Loop) { Name = "TS2", IsBackground = true };
+                        _ts2Thread.Start();
+                    }
+                }
+
+                _awaitingRetune2 = true;
+                _streaming2 = false;
+                _locked2 = false;
+
+                _configQueue.Enqueue(tunerConfig);
+                _nim.Wake();
+            }
+
+            // channel 2 lock, from the second demodulator
+            private void HandleStatus2(TunerStatus status)
+            {
+                if (_awaitingRetune2)
+                {
+                    if (!status.T2P1_reset)
+                        return;
+                    _awaitingRetune2 = false;
+                }
+
+                bool locked = status.T2P1_demod_status >= 2 && !status.T2P1_reset;
+                if (locked == _locked2)
+                    return;
+
+                _locked2 = locked;
+                Log.Information("Receiver: channel 2 lock " + (locked ? "on" : "off"));
+                _streaming2 = locked;
+                if (locked)
+                    _ts2Wake.Set();
+            }
+
+            // channel 2's stream (endpoint TS1) goes out by UDP in 7-packet datagrams, starting at a
+            // packet boundary (three 0x47 sync bytes 188 bytes apart)
+            private void Ts2Loop()
+            {
+                byte[] data = new byte[4096];
+                var pending = new List<byte>();
+                bool reading = false, synced = false;
+                IPEndPoint target = new IPEndPoint(IPAddress.Loopback, Tuner2UdpPort);
+
+                using (var udp = new UdpClient())
+                {
+                    try
+                    {
+                        while (!_closing)
+                        {
+                            if (!_streaming2)
+                            {
+                                reading = false;
+                                _ts2Wake.WaitOne(500);
+                                continue;
+                            }
+
+                            if (!reading)
+                            {
+                                _hardware.transport_flush(PicoTunerInterface.TS1);
+                                pending.Clear();
+                                synced = false;
+                                reading = true;
+                            }
+
+                            uint dataRead = 0;
+                            if (_hardware.transport_read(PicoTunerInterface.TS1, ref data, ref dataRead) != 0)
+                            {
+                                Thread.Sleep(10);
+                                continue;
+                            }
+
+                            if (!_streaming2 || _closing)
+                                continue;
+
+                            for (int c = 0; c < dataRead; c++)
+                                pending.Add(data[c]);
+
+                            while (!synced && pending.Count >= 377)
+                            {
+                                if (pending[0] == 0x47 && pending[188] == 0x47 && pending[376] == 0x47)
+                                    synced = true;
+                                else
+                                    pending.RemoveAt(0);
+                            }
+
+                            while (synced && pending.Count >= 1316)
+                            {
+                                try { udp.Send(pending.GetRange(0, 1316).ToArray(), 1316, target); }
+                                catch (SocketException) { }     // nobody listens (yet): the stream is simply dropped
+                                pending.RemoveRange(0, 1316);
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        if (!_closing)
+                            Log.Error(ex, "Receiver: channel 2 stream read stopped");
+                    }
+                }
+            }
+
             private void OnNimStatus(TunerStatus status)
             {
                 if (_closing)
@@ -366,6 +549,12 @@ namespace QocastPlayer.Receiver
 
                 lock (_owner._lock)
                     _owner._lastStatus = status;
+
+                if (_ts2Thread != null)
+                {
+                    try { HandleStatus2(status); }
+                    catch (Exception ex) { Log.Warning("Receiver: channel 2 status: " + ex.Message); }
+                }
 
                 // T1P2_reset marks the first status read after the tuner was set
                 if (_awaitingRetune)
@@ -500,6 +689,10 @@ namespace QocastPlayer.Receiver
                 _streaming = false;
                 _nim.Stop();
                 _tsWake.Set();
+                _streaming2 = false;
+                _ts2Wake.Set();
+                if (_ts2Thread != null && !_ts2Thread.Join(ThreadStopMs))
+                    Log.Warning("Receiver: channel 2 thread did not stop in time");
 
                 if (!_nimThread.Join(ThreadStopMs))
                     Log.Warning("Receiver: nim thread did not stop in time");

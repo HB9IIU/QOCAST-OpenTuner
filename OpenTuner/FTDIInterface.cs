@@ -722,7 +722,13 @@ namespace opentuner
                 for (uint c = 0; c < devcount; c++)
                 {
                     FTD2XX_NET.FTDI ftdi_device = new FTD2XX_NET.FTDI();
-                    ftdi_device.OpenByIndex(c);
+                    // A port that cannot be opened belongs to a tuner another program (the second
+                    // Player) is using: skip it, so the free tuner is the one that is found.
+                    if (ftdi_device.OpenByIndex(c) != FTD2XX_NET.FTDI.FT_STATUS.FT_OK)
+                    {
+                        Log.Information(c.ToString() + ": cannot be opened (busy), skipping");
+                        continue;
+                    }
 
                     FTD2XX_NET.FTDI.FT_DEVICE device = new FTD2XX_NET.FTDI.FT_DEVICE();
                     ftdi_device.GetDeviceType(ref device);
