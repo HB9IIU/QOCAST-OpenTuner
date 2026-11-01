@@ -172,8 +172,8 @@ namespace QocastPlayer
 
             _volumeItem = new ToolStripMenuItem { Enabled = false };
             var menu = new ContextMenuStrip();
-            menu.Items.AddRange(new ToolStripItem[] { _volumeItem, new ToolStripSeparator(), _muteItem, louder, quieter,
-                                                      new ToolStripSeparator(), _onTopItem, _titleBarItem });
+            // mute and volume are on the bar (speaker, slider): the menu keeps only the window choices
+            menu.Items.AddRange(new ToolStripItem[] { _onTopItem, _titleBarItem });
             ContextMenuStrip = menu;
             _status.ContextMenuStrip = menu;
             Video.ContextMenuStrip = menu;
@@ -339,7 +339,7 @@ namespace QocastPlayer
 
         private void UpdateTitle()
         {
-            Text = "QOCAST Player - " + (_config.muted ? "muted" : "volume " + _config.volume + "%");
+            Text = "QOCAST Player";      // volume and mute are shown on the bar
             _volumeItem.Text = _config.muted ? "Muted" : "Volume " + _config.volume + " %";
             _speaker.Text = _config.muted ? "" : "";       // Segoe MDL2: Mute / Volume
             _slider.Volume = _config.volume;

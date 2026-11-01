@@ -25,6 +25,10 @@ namespace QocastPlayer.Video
     // so fast lock/unlock changes never overlap and only the latest wish is carried out.
     public sealed class VideoPlayer : IDisposable
     {
+        // the picture on screen, for QOCAST's status line (null: no picture)
+        public static string PictureCodec;
+        public static string PictureSize;
+
         private readonly CircularBuffer _stream;
         private readonly LibVLC _libVLC;
         private readonly MediaPlayer _player;
@@ -183,8 +187,20 @@ namespace QocastPlayer.Video
                 }
             }
             LastMediaInfo = info;
+            PictureCodec = ShortCodec(info.VideoCodec);
+            PictureSize = info.VideoWidth > 0 ? info.VideoWidth + "x" + info.VideoHeight : null;
             Log.Information("Video: picture {Codec} {Width}x{Height}, audio {Audio}", info.VideoCodec, info.VideoWidth, info.VideoHeight, info.AudioCodec);
             PictureChanged?.Invoke(true);
+        }
+
+        // VLC's long codec name -> the short one people use
+        private static string ShortCodec(string description)
+        {
+            string d = (description ?? "").ToLowerInvariant();
+            if (d.Contains("h.265") || d.Contains("hevc")) return "H.265";
+            if (d.Contains("h.264") || d.Contains("avc")) return "H.264";
+            if (d.Contains("mpeg-2") || d.Contains("mpeg2")) return "MPEG-2";
+            return string.IsNullOrEmpty(description) ? null : description;
         }
 
         public void Dispose()

@@ -50,8 +50,42 @@ namespace QocastPlayer
             }
         }
 
+        // QOCAST starts the Player with its own process number (--parent). If QOCAST is gone without having
+        // closed it (ended by force, crashed), the Player closes too: none is left running on its own.
+        private static int ParentProcess(string[] args)
+        {
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--parent" && int.TryParse(args[i + 1], out int pid))
+                    return pid;
+            }
+            return 0;
+        }
+
+        private static void WatchParent(Form window, int pid)
+        {
+            if (pid <= 0)
+                return;
+            var timer = new System.Windows.Forms.Timer { Interval = 2000 };
+            timer.Tick += (s, e) =>
+            {
+                bool gone;
+                try { gone = System.Diagnostics.Process.GetProcessById(pid).HasExited; }
+                catch (ArgumentException) { gone = true; }          // no such process
+                catch (Exception) { gone = false; }                  // cannot tell: stay open
+                if (gone)
+                {
+                    timer.Stop();
+                    Log.Information("QOCAST is gone: closing the Player");
+                    window.Close();
+                }
+            };
+            timer.Start();
+        }
+
         private static int Run(string[] args)
         {
+            int parentPid = ParentProcess(args);
             string path = PlayerConfig.DefaultPath;
             for (int i = 0; i < args.Length - 1; i++)
             {
@@ -113,11 +147,14 @@ namespace QocastPlayer
                             window.SetVideoAspectRatio(info.VideoWidth, info.VideoHeight,
                                                        info.VideoSarNum, info.VideoSarDen);
                     }
+                    if (!picture)
+                        VideoPlayer.PictureCodec = VideoPlayer.PictureSize = null;
                     window.ShowStatus(picture ? null : StatusText(receiver.State, config));
                 };
 
                 window.ShowStatus(StatusText(ReceiverState.Disconnected, config));
                 window.Shown += (s, e) => receiver.Start();
+                WatchParent(window, parentPid);
                 Application.Run(window);
 
                 control.Close();

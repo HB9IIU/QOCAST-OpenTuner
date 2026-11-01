@@ -318,6 +318,11 @@ namespace QocastPlayer.Control
         {
             bool connected = _receiver.Connected;
             var receiver = RxInfo.Build(_receiver, _config);
+            if (receiver.locked)
+            {
+                receiver.video_codec = Video.VideoPlayer.PictureCodec;
+                receiver.video_resolution = Video.VideoPlayer.PictureSize;
+            }
             TuneRequest request = _receiver.LastRequest;
             string state;
             if (!connected)

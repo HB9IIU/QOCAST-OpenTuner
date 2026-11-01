@@ -51,8 +51,42 @@ namespace QocastPlayer
             }
         }
 
+        // QOCAST starts the Player with its own process number (--parent). If QOCAST is gone without having
+        // closed it (ended by force, crashed), the Player closes too: none is left running on its own.
+        private static int ParentProcess(string[] args)
+        {
+            for (int i = 0; i < args.Length - 1; i++)
+            {
+                if (args[i] == "--parent" && int.TryParse(args[i + 1], out int pid))
+                    return pid;
+            }
+            return 0;
+        }
+
+        private static void WatchParent(Form window, int pid)
+        {
+            if (pid <= 0)
+                return;
+            var timer = new System.Windows.Forms.Timer { Interval = 2000 };
+            timer.Tick += (s, e) =>
+            {
+                bool gone;
+                try { gone = System.Diagnostics.Process.GetProcessById(pid).HasExited; }
+                catch (ArgumentException) { gone = true; }          // no such process
+                catch (Exception) { gone = false; }                  // cannot tell: stay open
+                if (gone)
+                {
+                    timer.Stop();
+                    Log.Information("QOCAST is gone: closing the Player");
+                    window.Close();
+                }
+            };
+            timer.Start();
+        }
+
         private static int Run(string[] args)
         {
+            int parentPid = ParentProcess(args);
             string path = PlayerConfig.DefaultPath;
             for (int i = 0; i < args.Length - 1; i++)
             {
@@ -79,7 +113,7 @@ namespace QocastPlayer
             // (the stream comes by UDP, tuning goes through the Player). It never opens the USB device.
             Pico2Client pico = Pico2Client.TryConnect();
             if (pico != null)
-                return RunPicoClient(config, pico, before);
+                return RunPicoClient(config, pico, before, parentPid);
 
             using (var receiver = new ReceiverService(config))
             using (var window = new PlayerWindow(config))
@@ -157,6 +191,7 @@ namespace QocastPlayer
                     receiver.Tune((long)Math.Round(Band.BeaconMhz * 1000), 1500);
                     window.Spectrum.SetTuned(Band.BeaconMhz, 1500);
                 };
+                WatchParent(window, parentPid);
                 Application.Run(window);
 
                 control.Close();
@@ -175,7 +210,7 @@ namespace QocastPlayer
             return 0;
         }
 
-        private static int RunPicoClient(PlayerConfig config, Pico2Client pico, string before)
+        private static int RunPicoClient(PlayerConfig config, Pico2Client pico, string before, int parentPid)
         {
             Log.Information("PicoTuner with two channels: Player 2 shows channel 2");
             using (var window = new PlayerWindow(config))
@@ -247,6 +282,7 @@ namespace QocastPlayer
                     // opens on the beacon, as Player 2 does with a MiniTiouner
                     tune(Band.BeaconMhz, 1500);
                 };
+                WatchParent(window, parentPid);
                 Application.Run(window);
 
                 feed.Dispose();
