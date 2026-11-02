@@ -466,6 +466,7 @@ namespace QocastPlayer.Receiver
                         if (!_streaming || _closing)
                             continue;
 
+                        ObsForward.Send(data, (int)dataRead);          // a copy for OBS
                         CircularBuffer parserQueue = _owner._parser.parser_ts_data_queue;
                         for (int c = 0; c < dataRead; c++)
                         {

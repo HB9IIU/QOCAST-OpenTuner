@@ -176,6 +176,7 @@ namespace QocastPlayer
                     CircularBuffer stream = _stream;
                     if (stream == null || !_locked)
                         continue;
+                    ObsForward.Send(datagram, datagram.Length);
                     for (int i = 0; i < datagram.Length; i++)
                         stream.Enqueue(datagram[i]);
                 }
@@ -221,7 +222,6 @@ namespace QocastPlayer
         public void Dispose()
         {
             _stop = true;
-            try { _udp?.Close(); } catch { }
-        }
+            try { _udp?.Close(); } catch { }        }
     }
 }

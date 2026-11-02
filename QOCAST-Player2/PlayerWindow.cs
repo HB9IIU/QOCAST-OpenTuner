@@ -181,7 +181,11 @@ namespace QocastPlayer
             _spectrumItem = new ToolStripMenuItem("Spectrum") { Checked = true, CheckOnClick = true };   // always opens with the spectrum
             _spectrumItem.CheckedChanged += (s, e) => SetSpectrum(_spectrumItem.Checked);
             // double click on the picture: spectrum on / off
-            menu.Items.AddRange(new ToolStripItem[] { _spectrumItem, _onTopItem, _titleBarItem,
+            var obsItem = new ToolStripMenuItem("Copy UDP address for OBS", null, (s, e) =>
+            {
+                try { Clipboard.SetText("udp://127.0.0.1:" + ObsForward.Port); } catch { }
+            });
+            menu.Items.AddRange(new ToolStripItem[] { _spectrumItem, _onTopItem, _titleBarItem, obsItem,
                                                       new ToolStripSeparator(), new ToolStripMenuItem("Quit", null, (s, e) => Close()) });
             ContextMenuStrip = menu;
             _status.ContextMenuStrip = menu;
